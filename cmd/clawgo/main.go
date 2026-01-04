@@ -23,6 +23,8 @@ import (
 
 	"github.com/clawdbot/clawgo/internal/routing"
 	_ "github.com/clawdbot/clawgo/internal/routing/policy/default"
+	"github.com/clawdbot/clawgo/modules/audio"
+	"github.com/clawdbot/clawgo/modules/stt"
 
 	"github.com/grandcat/zeroconf"
 )
@@ -272,14 +274,24 @@ func runNode(cfg NodeConfig) error {
 		state.DisplayName = cfg.DisplayName
 	}
 
-	var stdinCh chan string
+	var transcriptCh <-chan stt.Transcript
 	if cfg.StdinMode || cfg.StdinPath != "" {
-		stdinCh = make(chan string, 32)
+		var capture audio.Capture
 		if cfg.StdinPath != "" {
-			go readLinesFromPathLoop(ctx, logf, cfg.StdinPath, stdinCh)
+			capture = audio.NewLineCaptureFromPath(cfg.StdinPath, logf)
 		} else {
-			go readLinesFromReader(ctx, logf, os.Stdin, "stdin", stdinCh)
+			capture = audio.NewLineCapture("stdin", os.Stdin, logf)
 		}
+		frames, err := capture.Start(ctx)
+		if err != nil {
+			return err
+		}
+		engine := stt.NewLineEngine()
+		transcriptCh, err = engine.Transcribe(ctx, frames, stt.Options{})
+		if err != nil {
+			return err
+		}
+		logf("stt: %s capture=%s", engine.Name(), capture.Name())
 	}
 
 	var mdnsCleanup func()
@@ -370,7 +382,7 @@ func runNode(cfg NodeConfig) error {
 		}
 
 		var router routing.Router
-		if stdinCh != nil {
+		if transcriptCh != nil {
 			routerCfg := routing.Config{
 				SessionKey:       cfg.SessionKey,
 				AgentRequest:     cfg.AgentRequest,
@@ -388,8 +400,8 @@ func runNode(cfg NodeConfig) error {
 			}
 		}
 		connCtx, connCancel := context.WithCancel(ctx)
-		if stdinCh != nil {
-			go forwardStdin(connCtx, client, cfg, stdinCh, router)
+		if transcriptCh != nil {
+			go forwardTranscripts(connCtx, client, cfg, transcriptCh, router)
 		}
 		if cfg.PingInterval > 0 {
 			go pingLoop(connCtx, client, cfg.PingInterval)
@@ -675,56 +687,18 @@ func handleFrame(c *BridgeClient, frame map[string]any) error {
 	return nil
 }
 
-func readLinesFromReader(ctx context.Context, logf func(string, ...any), r io.Reader, label string, out chan<- string) {
-	scanner := bufio.NewScanner(r)
-	for scanner.Scan() {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-		text := strings.TrimSpace(scanner.Text())
-		if text == "" {
-			continue
-		}
-		select {
-		case out <- text:
-		case <-ctx.Done():
-			return
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		logf("%s error: %v", label, err)
-	}
-}
-
-func readLinesFromPathLoop(ctx context.Context, logf func(string, ...any), path string, out chan<- string) {
+func forwardTranscripts(ctx context.Context, c *BridgeClient, cfg NodeConfig, in <-chan stt.Transcript, router routing.Router) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		default:
-		}
-		f, err := os.Open(path)
-		if err != nil {
-			logf("stdin-file open failed: %v", err)
-			time.Sleep(1 * time.Second)
-			continue
-		}
-		readLinesFromReader(ctx, logf, f, path, out)
-		_ = f.Close()
-		time.Sleep(200 * time.Millisecond)
-	}
-}
-
-func forwardStdin(ctx context.Context, c *BridgeClient, cfg NodeConfig, in <-chan string, router routing.Router) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case text, ok := <-in:
+		case tr, ok := <-in:
 			if !ok {
 				return
+			}
+			text := strings.TrimSpace(tr.Text)
+			if text == "" {
+				continue
 			}
 			if router != nil {
 				handled, err := router.HandleTranscript(ctx, text)
@@ -748,6 +722,7 @@ func forwardStdin(ctx context.Context, c *BridgeClient, cfg NodeConfig, in <-cha
 	}
 }
 
+// bridgeTransport adapts the BridgeClient to the routing.Transport interface.
 type bridgeTransport struct {
 	client *BridgeClient
 }
@@ -766,7 +741,8 @@ func (t bridgeTransport) SendProviderMessage(provider, to, message string) error
 }
 
 func sendVoiceTranscript(c *BridgeClient, cfg NodeConfig, text string) error {
-	if strings.TrimSpace(text) == "" {
+	text = strings.TrimSpace(text)
+	if text == "" {
 		return nil
 	}
 	payload := map[string]any{"text": text}
@@ -786,7 +762,8 @@ func sendVoiceTranscript(c *BridgeClient, cfg NodeConfig, text string) error {
 }
 
 func sendAgentRequest(c *BridgeClient, cfg NodeConfig, text string) error {
-	if strings.TrimSpace(text) == "" {
+	text = strings.TrimSpace(text)
+	if text == "" {
 		return nil
 	}
 	payload := map[string]any{"message": text}
