@@ -78,6 +78,9 @@ type NodeConfig struct {
 	QuickActions     bool
 	QuickPingMessage string
 	RoutingPlugin    string
+	STTEngine        string
+	STTCommand       string
+	STTArgs          string
 }
 
 func main() {
@@ -134,6 +137,9 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  -ping-interval   Ping interval (default 30s)")
 	fmt.Fprintln(os.Stderr, "  -quick-actions   Enable built-in quick actions (default true)")
 	fmt.Fprintln(os.Stderr, "  -router          Routing plugin name (default default)")
+	fmt.Fprintln(os.Stderr, "  -stt-engine      STT engine (line, brabble)")
+	fmt.Fprintln(os.Stderr, "  -stt-command     STT command for brabble (default brabble)")
+	fmt.Fprintln(os.Stderr, "  -stt-args        STT args for brabble (space-separated)")
 	fmt.Fprintln(os.Stderr, "  -ping-message    Message used for telegram ping quick action (default \"Ping.\")")
 	fmt.Fprintln(os.Stderr, "  -mdns            Advertise mDNS presence (default true)")
 	fmt.Fprintln(os.Stderr, "  -mdns-service    mDNS service type (default _clawdis-node._tcp)")
@@ -170,6 +176,9 @@ func parseFlags(cmd string, args []string) NodeConfig {
 	quickActions := fs.Bool("quick-actions", true, "enable built-in quick actions")
 	quickPingMessage := fs.String("ping-message", "Ping.", "message used for telegram ping quick action")
 	router := fs.String("router", "default", "routing plugin name")
+	sttEngine := fs.String("stt-engine", "line", "STT engine (line, brabble)")
+	sttCommand := fs.String("stt-command", "brabble", "STT command for brabble")
+	sttArgs := fs.String("stt-args", "", "STT args for brabble (space-separated)")
 	mdnsEnabled := fs.Bool("mdns", true, "advertise mDNS presence")
 	mdnsService := fs.String("mdns-service", "_clawdis-node._tcp", "mDNS service type")
 	mdnsDomain := fs.String("mdns-domain", "local.", "mDNS domain")
@@ -218,6 +227,9 @@ func parseFlags(cmd string, args []string) NodeConfig {
 		QuickActions:     *quickActions,
 		QuickPingMessage: strings.TrimSpace(*quickPingMessage),
 		RoutingPlugin:    strings.TrimSpace(*router),
+		STTEngine:        strings.TrimSpace(*sttEngine),
+		STTCommand:       strings.TrimSpace(*sttCommand),
+		STTArgs:          strings.TrimSpace(*sttArgs),
 	}
 	return cfg
 }
@@ -275,23 +287,42 @@ func runNode(cfg NodeConfig) error {
 	}
 
 	var transcriptCh <-chan stt.Transcript
-	if cfg.StdinMode || cfg.StdinPath != "" {
-		var capture audio.Capture
-		if cfg.StdinPath != "" {
-			capture = audio.NewLineCaptureFromPath(cfg.StdinPath, logf)
-		} else {
-			capture = audio.NewLineCapture("stdin", os.Stdin, logf)
+	engineName := strings.TrimSpace(cfg.STTEngine)
+	if engineName == "" {
+		engineName = "line"
+	}
+	switch engineName {
+	case "line":
+		if cfg.StdinMode || cfg.StdinPath != "" {
+			var capture audio.Capture
+			if cfg.StdinPath != "" {
+				capture = audio.NewLineCaptureFromPath(cfg.StdinPath, logf)
+			} else {
+				capture = audio.NewLineCapture("stdin", os.Stdin, logf)
+			}
+			frames, err := capture.Start(ctx)
+			if err != nil {
+				return err
+			}
+			engine := stt.NewLineEngine()
+			transcriptCh, err = engine.Transcribe(ctx, frames, stt.Options{})
+			if err != nil {
+				return err
+			}
+			logf("stt: %s capture=%s", engine.Name(), capture.Name())
 		}
-		frames, err := capture.Start(ctx)
+	case "brabble":
+		cmd := strings.TrimSpace(cfg.STTCommand)
+		args := splitArgs(cfg.STTArgs)
+		engine := stt.NewBrabbleEngine(stt.BrabbleConfig{Command: cmd, Args: args}, logf)
+		var err error
+		transcriptCh, err = engine.Transcribe(ctx, nil, stt.Options{})
 		if err != nil {
 			return err
 		}
-		engine := stt.NewLineEngine()
-		transcriptCh, err = engine.Transcribe(ctx, frames, stt.Options{})
-		if err != nil {
-			return err
-		}
-		logf("stt: %s capture=%s", engine.Name(), capture.Name())
+		logf("stt: %s cmd=%s", engine.Name(), formatCommand(cmd, args))
+	default:
+		return fmt.Errorf("unknown stt engine: %s", engineName)
 	}
 
 	var mdnsCleanup func()
@@ -1250,6 +1281,25 @@ func randomID(n int) string {
 		return fmt.Sprintf("%d", time.Now().UnixNano())
 	}
 	return hex.EncodeToString(buf)
+}
+
+func splitArgs(input string) []string {
+	fields := strings.Fields(strings.TrimSpace(input))
+	if len(fields) == 0 {
+		return nil
+	}
+	return fields
+}
+
+func formatCommand(cmd string, args []string) string {
+	cmd = strings.TrimSpace(cmd)
+	if cmd == "" {
+		cmd = "brabble"
+	}
+	if len(args) == 0 {
+		return cmd
+	}
+	return fmt.Sprintf("%s %s", cmd, strings.Join(args, " "))
 }
 
 func splitCSV(value string) []string {
