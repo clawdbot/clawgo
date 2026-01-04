@@ -34,6 +34,7 @@ GOOS=linux GOARCH=arm64 go build -o /tmp/clawgo-linux-arm64 ./cmd/clawgo
 | `-deliver-to` | Delivery destination id. |
 | `-quick-actions` | Enable built-in quick actions (default true). |
 | `-ping-message` | Message used for telegram ping quick action. |
+| `-router` | Routing plugin name (default `default`). |
 
 ## Pair
 
@@ -50,20 +51,21 @@ Approve via `clawdis nodes approve <requestId>`.
 ```bash
 mkfifo /tmp/voice.fifo
 # in one terminal
-tail -f /tmp/voice.fifo | ./clawgo run \ 
+tail -f /tmp/voice.fifo | ./clawgo run \
   -bridge 100.88.46.29:18790 \
   -stdin \
   -chat-subscribe \
   -tts-engine system
 # elsewhere
-printf hey computer turn on the lightsn > /tmp/voice.fifo
+printf hey computer turn on the lights
+ > /tmp/voice.fifo
 ```
 
 Each line on the FIFO becomes a `voice.transcript`; chat responses from the `main` session are spoken via `espeak-ng`.
 
 ## systemd example
 
-See `docs/linux-node.md` for the end-to-end Pi setup. TL;DR:
+Minimal steps:
 
 1. Install the binary as `/home/pi/clawgo`.
 2. Create a wrapper script that keeps a FIFO (`/home/pi/.cache/clawdis/voice.fifo`) open and pipes it into `clawgo run -stdin`.

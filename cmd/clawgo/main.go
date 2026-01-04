@@ -107,7 +107,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Common flags:")
 	fmt.Fprintln(os.Stderr, "  -bridge          Bridge host:port (default 127.0.0.1:18790)")
-	fmt.Fprintln(os.Stderr, "  -state           Path to node state JSON (default ~/.clawdis/linux-node.json)")
+	fmt.Fprintln(os.Stderr, "  -state           Path to node state JSON (default ~/.clawdis/clawgo.json)")
 	fmt.Fprintln(os.Stderr, "  -node-id         Override node id (default derived from hostname)")
 	fmt.Fprintln(os.Stderr, "  -display-name    Friendly display name (default hostname)")
 	fmt.Fprintln(os.Stderr, "  -platform        Platform label (default linux)")
@@ -1100,7 +1100,7 @@ func startMDNS(cfg NodeConfig, state *NodeState, logf func(string, ...any)) func
 		}
 	}
 	if hostLabel == "" {
-		hostLabel = "clawdis-node"
+		hostLabel = "clawgo"
 	}
 	bridgeHost, bridgePort := parseBridgeAddr(cfg.BridgeAddr)
 	txt := []string{fmt.Sprintf("role=%s", "node"), fmt.Sprintf("displayName=%s", name), fmt.Sprintf("lanHost=%s.local", hostLabel), fmt.Sprintf("nodeId=%s", state.NodeID), "transport=node"}
@@ -1161,9 +1161,9 @@ func parseBridgeAddr(addr string) (string, int) {
 func defaultStatePath() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "./linux-node.json"
+		return "./clawgo.json"
 	}
-	return filepath.Join(home, ".clawdis", "linux-node.json")
+	return filepath.Join(home, ".clawdis", "clawgo.json")
 }
 
 func loadOrInitState(cfg NodeConfig) (*NodeState, error) {
@@ -1222,7 +1222,7 @@ func deriveNodeID() string {
 func defaultDisplayName() string {
 	host, err := os.Hostname()
 	if err != nil || strings.TrimSpace(host) == "" {
-		return "linux-node"
+		return "clawgo"
 	}
 	return host
 }
