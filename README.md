@@ -25,7 +25,7 @@ GOOS=linux GOARCH=arm64 go build -o /tmp/clawgo-linux-arm64 ./cmd/clawgo
 | `-tts-engine` | `system`, `piper`, `elevenlabs`, or `none` (system = `espeak-ng`). |
 | `-tts-system-voice` | espeak voice id (default `en-us`). |
 | `-tts-system-rate` | Speech rate (wpm). |
-| `-mdns-service` | Bonjour service type (default `_clawdis-node._tcp`). |
+| `-mdns-service` | Bonjour service type (default `_clawdbot-node._tcp`). |
 | `-stdin` | Read transcripts from stdin (pipe/FIFO). |
 | `-stdin-file` | Read transcripts from a FIFO/file instead of stdin. |
 | `-agent-request` | Send transcripts as `agent.request` (uses agent + deliver). |
@@ -44,7 +44,7 @@ GOOS=linux GOARCH=arm64 go build -o /tmp/clawgo-linux-arm64 ./cmd/clawgo
   -display-name "Razor Pi"
 ```
 
-Approve via `clawdis nodes approve <requestId>`.
+Approve via `clawdbot nodes approve <requestId>`.
 
 ## Run (FIFO + TTS example)
 
@@ -68,24 +68,24 @@ Each line on the FIFO becomes a `voice.transcript`; chat responses from the `mai
 Minimal steps:
 
 1. Install the binary as `/home/pi/clawgo`.
-2. Create a wrapper script that keeps a FIFO (`/home/pi/.cache/clawdis/voice.fifo`) open and pipes it into `clawgo run -stdin`.
+2. Create a wrapper script that keeps a FIFO (`/home/pi/.cache/clawdbot/voice.fifo`) open and pipes it into `clawgo run -stdin`.
 3. Create `/etc/systemd/system/clawgo.service` pointing to that wrapper.
 
 ## mDNS advertising
 
-The node advertises `_clawdis-node._tcp` by default.
+The node advertises `_clawdbot-node._tcp` by default.
 
 ```bash
-dns-sd -B _clawdis-node._tcp local.
+dns-sd -B _clawdbot-node._tcp local.
 ```
 
-Override to `_clawdis-bridge._tcp` if you intentionally want it to show up as a gateway beacon:
+Override to `_clawdbot-bridge._tcp` if you intentionally want it to show up as a gateway beacon:
 
 ```bash
-./clawgo run -mdns-service _clawdis-bridge._tcp
+./clawgo run -mdns-service _clawdbot-bridge._tcp
 ```
 
 ## Notes
-- Node state (`nodeId` + token) lives in `~/.clawdis/clawgo.json`.
+- Node state (`nodeId` + token) lives in `~/.clawdbot/clawgo.json`.
 - Caps default to `voiceWake`; override via `-caps` if you expose more commands.
 - Set `bridge.bind: "tailnet"` on the gateway to restrict the bridge to Tailscale.

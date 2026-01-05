@@ -57,6 +57,8 @@ type NodeConfig struct {
 	ModelIdentifier  string
 	Caps             []string
 	Commands         []string
+	Permissions      map[string]bool
+	PairSilent       bool
 	SessionKey       string
 	PingInterval     time.Duration
 	StdinMode        bool
@@ -112,7 +114,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Common flags:")
 	fmt.Fprintln(os.Stderr, "  -bridge          Bridge host:port (default 127.0.0.1:18790)")
-	fmt.Fprintln(os.Stderr, "  -state           Path to node state JSON (default ~/.clawdis/clawgo.json)")
+	fmt.Fprintln(os.Stderr, "  -state           Path to node state JSON (default ~/.clawdbot/clawgo.json)")
 	fmt.Fprintln(os.Stderr, "  -node-id         Override node id (default derived from hostname)")
 	fmt.Fprintln(os.Stderr, "  -display-name    Friendly display name (default hostname)")
 	fmt.Fprintln(os.Stderr, "  -platform        Platform label (default linux)")
@@ -121,6 +123,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  -model-identifier Model identifier override")
 	fmt.Fprintln(os.Stderr, "  -caps            Comma-separated caps (default voiceWake)")
 	fmt.Fprintln(os.Stderr, "  -commands        Comma-separated commands (default none)")
+	fmt.Fprintln(os.Stderr, "  -permissions     Comma-separated permission keys to advertise (true)")
+	fmt.Fprintln(os.Stderr, "  -pair-silent     Request silent pairing (if supported by gateway)")
 	fmt.Fprintln(os.Stderr, "  -session-key     Session key for voice.transcript (default main)")
 	fmt.Fprintln(os.Stderr, "  -chat-session-key Session key for chat.subscribe (default main)")
 	fmt.Fprintln(os.Stderr, "  -chat-subscribe  Subscribe to chat stream for TTS (default true)")
@@ -142,7 +146,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  -stt-args        STT args for brabble (space-separated)")
 	fmt.Fprintln(os.Stderr, "  -ping-message    Message used for telegram ping quick action (default \"Ping.\")")
 	fmt.Fprintln(os.Stderr, "  -mdns            Advertise mDNS presence (default true)")
-	fmt.Fprintln(os.Stderr, "  -mdns-service    mDNS service type (default _clawdis-node._tcp)")
+	fmt.Fprintln(os.Stderr, "  -mdns-service    mDNS service type (default _clawdbot-node._tcp)")
 	fmt.Fprintln(os.Stderr, "  -mdns-domain     mDNS domain (default local.)")
 	fmt.Fprintln(os.Stderr, "  -mdns-name       mDNS instance name override")
 }
@@ -159,6 +163,8 @@ func parseFlags(cmd string, args []string) NodeConfig {
 	modelIdentifier := fs.String("model-identifier", "", "model identifier")
 	caps := fs.String("caps", "voiceWake", "comma-separated caps")
 	commands := fs.String("commands", "", "comma-separated commands")
+	permissions := fs.String("permissions", "", "comma-separated permission keys")
+	pairSilent := fs.Bool("pair-silent", false, "request silent pairing")
 	sessionKey := fs.String("session-key", "main", "session key for voice.transcript")
 	chatSessionKey := fs.String("chat-session-key", "main", "session key for chat.subscribe")
 	chatSubscribe := fs.Bool("chat-subscribe", true, "subscribe to chat events for TTS")
@@ -180,7 +186,7 @@ func parseFlags(cmd string, args []string) NodeConfig {
 	sttCommand := fs.String("stt-command", "brabble", "STT command for brabble")
 	sttArgs := fs.String("stt-args", "", "STT args for brabble (space-separated)")
 	mdnsEnabled := fs.Bool("mdns", true, "advertise mDNS presence")
-	mdnsService := fs.String("mdns-service", "_clawdis-node._tcp", "mDNS service type")
+	mdnsService := fs.String("mdns-service", "_clawdbot-node._tcp", "mDNS service type")
 	mdnsDomain := fs.String("mdns-domain", "local.", "mDNS domain")
 	mdnsName := fs.String("mdns-name", "", "mDNS instance name override")
 	_ = fs.Parse(args)
@@ -206,6 +212,8 @@ func parseFlags(cmd string, args []string) NodeConfig {
 		ModelIdentifier:  strings.TrimSpace(*modelIdentifier),
 		Caps:             splitCSV(*caps),
 		Commands:         splitCSV(*commands),
+		Permissions:      permissionsFromString(*permissions),
+		PairSilent:       *pairSilent,
 		SessionKey:       strings.TrimSpace(*sessionKey),
 		StdinMode:        *stdinMode,
 		PingInterval:     *pingInterval,
@@ -575,7 +583,10 @@ func sendPairRequest(c *BridgeClient, cfg NodeConfig, state *NodeState) error {
 		"modelIdentifier": cfg.ModelIdentifier,
 		"caps":            cfg.Caps,
 		"commands":        cfg.Commands,
-		"permissions":     map[string]bool{},
+		"permissions":     permissionsOrEmpty(cfg.Permissions),
+	}
+	if cfg.PairSilent {
+		frame["silent"] = true
 	}
 	return c.sendFrame(frame)
 }
@@ -592,7 +603,7 @@ func sendHello(c *BridgeClient, cfg NodeConfig, state *NodeState) error {
 		"modelIdentifier": cfg.ModelIdentifier,
 		"caps":            cfg.Caps,
 		"commands":        cfg.Commands,
-		"permissions":     map[string]bool{},
+		"permissions":     permissionsOrEmpty(cfg.Permissions),
 	}
 	return c.sendFrame(frame)
 }
@@ -1083,7 +1094,7 @@ func startMDNS(cfg NodeConfig, state *NodeState, logf func(string, ...any)) func
 	}
 	service := strings.TrimSpace(cfg.MDNSService)
 	if service == "" {
-		service = "_clawdis-node._tcp"
+		service = "_clawdbot-node._tcp"
 	}
 	domain := strings.TrimSpace(cfg.MDNSDomain)
 	if domain == "" {
@@ -1096,9 +1107,10 @@ func startMDNS(cfg NodeConfig, state *NodeState, logf func(string, ...any)) func
 	if name == "" {
 		name = defaultDisplayName()
 	}
-	if !strings.Contains(strings.ToLower(name), "clawdis") {
-		name = fmt.Sprintf("%s (Clawdis)", name)
+	if !strings.Contains(strings.ToLower(name), "clawdbot") {
+		name = fmt.Sprintf("%s (Clawdbot)", name)
 	}
+	displayName := prettifyInstanceName(name)
 	hostLabel := strings.TrimSpace(defaultDisplayName())
 	hostLabel = strings.TrimSuffix(hostLabel, ".local")
 	if strings.Contains(hostLabel, ".") {
@@ -1111,7 +1123,7 @@ func startMDNS(cfg NodeConfig, state *NodeState, logf func(string, ...any)) func
 		hostLabel = "clawgo"
 	}
 	bridgeHost, bridgePort := parseBridgeAddr(cfg.BridgeAddr)
-	txt := []string{fmt.Sprintf("role=%s", "node"), fmt.Sprintf("displayName=%s", name), fmt.Sprintf("lanHost=%s.local", hostLabel), fmt.Sprintf("nodeId=%s", state.NodeID), "transport=node"}
+	txt := []string{fmt.Sprintf("role=%s", "node"), fmt.Sprintf("displayName=%s", displayName), fmt.Sprintf("lanHost=%s.local", hostLabel), fmt.Sprintf("nodeId=%s", state.NodeID), "transport=node"}
 	if bridgeHost != "" {
 		txt = append(txt, fmt.Sprintf("bridgeHost=%s", bridgeHost))
 	}
@@ -1171,7 +1183,7 @@ func defaultStatePath() string {
 	if err != nil {
 		return "./clawgo.json"
 	}
-	return filepath.Join(home, ".clawdis", "clawgo.json")
+	return filepath.Join(home, ".clawdbot", "clawgo.json")
 }
 
 func loadOrInitState(cfg NodeConfig) (*NodeState, error) {
@@ -1317,6 +1329,38 @@ func splitCSV(value string) []string {
 		out = append(out, item)
 	}
 	return out
+}
+
+func permissionsOrEmpty(perms map[string]bool) map[string]bool {
+	if perms == nil {
+		return map[string]bool{}
+	}
+	return perms
+}
+
+func permissionsFromString(value string) map[string]bool {
+	items := splitCSV(value)
+	if len(items) == 0 {
+		return map[string]bool{}
+	}
+	out := make(map[string]bool, len(items))
+	for _, item := range items {
+		out[item] = true
+	}
+	return out
+}
+
+func prettifyInstanceName(name string) string {
+	normalized := strings.TrimSpace(strings.Join(strings.Fields(name), " "))
+	if normalized == "" {
+		return name
+	}
+	lower := strings.ToLower(normalized)
+	suffix := " (clawdbot)"
+	if strings.HasSuffix(lower, suffix) {
+		normalized = strings.TrimSpace(normalized[:len(normalized)-len(suffix)])
+	}
+	return normalized
 }
 
 func frameType(frame map[string]any) string {
