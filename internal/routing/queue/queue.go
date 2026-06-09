@@ -20,22 +20,6 @@ func New(size int) *Queue {
 	return &Queue{ch: make(chan Task, size)}
 }
 
-func (q *Queue) Start(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case task, ok := <-q.ch:
-			if !ok {
-				return
-			}
-			if task != nil {
-				_ = task(ctx)
-			}
-		}
-	}
-}
-
 func (q *Queue) Enqueue(task Task) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
