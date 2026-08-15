@@ -350,7 +350,12 @@ func runNode(cfg NodeConfig) error {
 		client, err := connectBridge(cfg.BridgeAddr)
 		if err != nil {
 			logf("bridge connect failed: %v", err)
-			time.Sleep(backoff)
+			if err := sleepContext(ctx, backoff); err != nil {
+				if mdnsCleanup != nil {
+					mdnsCleanup()
+				}
+				return nil
+			}
 			if backoff < 15*time.Second {
 				backoff *= 2
 				if backoff > 15*time.Second {
@@ -482,7 +487,12 @@ func runNode(cfg NodeConfig) error {
 			}
 			return nil
 		}
-		time.Sleep(backoff)
+		if err := sleepContext(ctx, backoff); err != nil {
+			if mdnsCleanup != nil {
+				mdnsCleanup()
+			}
+			return nil
+		}
 		if backoff < 15*time.Second {
 			backoff *= 2
 			if backoff > 15*time.Second {
