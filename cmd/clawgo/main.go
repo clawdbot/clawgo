@@ -336,6 +336,12 @@ func runNode(cfg NodeConfig) error {
 	var mdnsCleanup func()
 	mdnsStarted := false
 	backoff := time.Second
+	var ttsQueue *TTSQueue
+	defer func() {
+		if ttsQueue != nil {
+			ttsQueue.Stop()
+		}
+	}()
 
 	for {
 		select {
@@ -400,16 +406,20 @@ func runNode(cfg NodeConfig) error {
 			if sessionKey == "" {
 				sessionKey = strings.TrimSpace(cfg.SessionKey)
 			}
-			ttsQueue, err := buildTTSEngine(cfg, client.logf)
+			engine, err := newNodeTTSEngine(cfg)
 			if err != nil {
 				client.logf("tts disabled: %v", err)
-			} else if ttsQueue != nil && sessionKey != "" {
+				ttsQueue = replaceTTSQueue(ttsQueue, nil, client.logf)
+			} else if engine != nil && sessionKey != "" {
+				ttsQueue = replaceTTSQueue(ttsQueue, engine, client.logf)
 				chatHandler = newChatSubscriber(sessionKey, ttsQueue, client.logf)
 				if err := subscribeChat(client, sessionKey); err != nil {
 					client.logf("chat.subscribe failed: %v", err)
 				} else {
 					client.logf("chat.subscribe sessionKey=%s", sessionKey)
 				}
+			} else {
+				ttsQueue = replaceTTSQueue(ttsQueue, nil, client.logf)
 			}
 		}
 		if chatHandler != nil {
@@ -870,9 +880,12 @@ type TTSEngine interface {
 }
 
 type TTSQueue struct {
-	engine TTSEngine
-	queue  chan string
-	logf   func(string, ...any)
+	engine   TTSEngine
+	queue    chan string
+	stop     chan struct{}
+	done     chan struct{}
+	logf     func(string, ...any)
+	stopOnce sync.Once
 }
 
 func newTTSQueue(engine TTSEngine, logf func(string, ...any)) *TTSQueue {
@@ -882,18 +895,47 @@ func newTTSQueue(engine TTSEngine, logf func(string, ...any)) *TTSQueue {
 	q := &TTSQueue{
 		engine: engine,
 		queue:  make(chan string, 16),
+		stop:   make(chan struct{}),
+		done:   make(chan struct{}),
 		logf:   logf,
 	}
 	go q.loop()
 	return q
 }
 
+func replaceTTSQueue(prev *TTSQueue, engine TTSEngine, logf func(string, ...any)) *TTSQueue {
+	if prev != nil {
+		prev.Stop()
+	}
+	return newTTSQueue(engine, logf)
+}
+
 func (q *TTSQueue) loop() {
-	for text := range q.queue {
-		if err := q.engine.Speak(text); err != nil {
-			q.logf("tts error: %v", err)
+	defer close(q.done)
+	for {
+		select {
+		case <-q.stop:
+			return
+		case text := <-q.queue:
+			select {
+			case <-q.stop:
+				return
+			default:
+			}
+			if err := q.engine.Speak(text); err != nil {
+				q.logf("tts error: %v", err)
+			}
 		}
 	}
+}
+
+func (q *TTSQueue) Stop() {
+	if q == nil {
+		return
+	}
+	q.stopOnce.Do(func() {
+		close(q.stop)
+	})
 }
 
 func (q *TTSQueue) Speak(text string) {
@@ -902,6 +944,8 @@ func (q *TTSQueue) Speak(text string) {
 		return
 	}
 	select {
+	case <-q.stop:
+		return
 	case q.queue <- trimmed:
 	default:
 		q.logf("tts queue full; dropping text")
@@ -944,16 +988,12 @@ func (s *systemTTSEngine) Speak(text string) error {
 	return cmd.Run()
 }
 
-func buildTTSEngine(cfg NodeConfig, logf func(string, ...any)) (*TTSQueue, error) {
+func newNodeTTSEngine(cfg NodeConfig) (TTSEngine, error) {
 	switch strings.ToLower(strings.TrimSpace(cfg.TTSEngine)) {
 	case "", "none":
 		return nil, nil
 	case "system":
-		engine, err := newSystemTTSEngine(cfg.TTSSystemCommand, cfg.TTSSystemVoice, cfg.TTSSystemRate)
-		if err != nil {
-			return nil, err
-		}
-		return newTTSQueue(engine, logf), nil
+		return newSystemTTSEngine(cfg.TTSSystemCommand, cfg.TTSSystemVoice, cfg.TTSSystemRate)
 	default:
 		return nil, fmt.Errorf("unsupported tts engine: %s", cfg.TTSEngine)
 	}
