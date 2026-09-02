@@ -908,10 +908,13 @@ func (q *TTSQueue) Speak(text string) {
 	}
 }
 
+const defaultTTSSpeakTimeout = 30 * time.Second
+
 type systemTTSEngine struct {
 	command string
 	voice   string
 	rate    int
+	timeout time.Duration
 }
 
 func newSystemTTSEngine(cmd, voice string, rate int) (*systemTTSEngine, error) {
@@ -922,7 +925,7 @@ func newSystemTTSEngine(cmd, voice string, rate int) (*systemTTSEngine, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &systemTTSEngine{command: resolved, voice: voice, rate: rate}, nil
+	return &systemTTSEngine{command: resolved, voice: voice, rate: rate, timeout: defaultTTSSpeakTimeout}, nil
 }
 
 func (s *systemTTSEngine) Speak(text string) error {
@@ -938,7 +941,13 @@ func (s *systemTTSEngine) Speak(text string) error {
 		args = append(args, "-s", strconv.Itoa(s.rate))
 	}
 	args = append(args, trimmed)
-	cmd := exec.Command(s.command, args...)
+	timeout := s.timeout
+	if timeout <= 0 {
+		timeout = defaultTTSSpeakTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, s.command, args...)
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
 	return cmd.Run()
