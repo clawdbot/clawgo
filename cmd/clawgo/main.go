@@ -937,7 +937,7 @@ func (s *systemTTSEngine) Speak(text string) error {
 	if s.rate > 0 {
 		args = append(args, "-s", strconv.Itoa(s.rate))
 	}
-	args = append(args, trimmed)
+	args = append(args, "--", trimmed)
 	cmd := exec.Command(s.command, args...)
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
