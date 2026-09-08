@@ -729,6 +729,14 @@ func handleFrame(c *BridgeClient, frame map[string]any) error {
 	return nil
 }
 
+// Non-final events are interim STT hypotheses; the bridge has no final field.
+func shouldForwardTranscript(tr stt.Transcript) bool {
+	if strings.TrimSpace(tr.Text) == "" {
+		return false
+	}
+	return tr.Final
+}
+
 func forwardTranscripts(ctx context.Context, c *BridgeClient, cfg NodeConfig, in <-chan stt.Transcript, router routing.Router) {
 	for {
 		select {
@@ -738,10 +746,10 @@ func forwardTranscripts(ctx context.Context, c *BridgeClient, cfg NodeConfig, in
 			if !ok {
 				return
 			}
-			text := strings.TrimSpace(tr.Text)
-			if text == "" {
+			if !shouldForwardTranscript(tr) {
 				continue
 			}
+			text := strings.TrimSpace(tr.Text)
 			if router != nil {
 				handled, err := router.HandleTranscript(ctx, text)
 				if err != nil {
